@@ -23,7 +23,7 @@ const CONFIG = {
   city: "Barretos",
   lat: -20.557,
   lng: -48.567,
-  radius: 5000,
+  radius: 1000,
   state: "SP",
   country: "Brasil",
 };
