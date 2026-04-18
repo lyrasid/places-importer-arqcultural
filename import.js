@@ -24,7 +24,6 @@ const CONFIG = {
   limit: parseInt(getArg("limit", "9999"))
 };
 
-
 console.log("CONFIG:", CONFIG);
 
 
@@ -101,6 +100,7 @@ async function fetchOverpass(query, retries = 3) {
 }
 
 
+
 // ==============================
 // CATEGORIAS
 // ==============================
@@ -110,10 +110,16 @@ function getCategories(tags) {
   const categories = [];
 
   if (tags.tourism === "museum") categories.push("museum");
-  if (tags.historic) categories.push("historic");
+  if (tags.tourism === "gallery") categories.push("museum");
   if (tags.tourism === "attraction") categories.push("attraction");
+
+  if (tags.historic) categories.push("historic");
+
   if (tags.amenity === "theatre") categories.push("culture");
+  if (tags.amenity === "arts_centre") categories.push("culture");
   if (tags.amenity === "place_of_worship") categories.push("religious");
+
+  if (tags.leisure === "park") categories.push("park");
 
   if (categories.length === 0) categories.push("landmark");
 
@@ -128,9 +134,14 @@ function getCategories(tags) {
 function getImportance(tags) {
 
   if (tags.wikipedia && tags.heritage) return 5;
+
   if (tags.tourism === "museum") return 4;
+
   if (tags.wikipedia) return 4;
+
   if (tags.historic) return 3;
+
+  if (tags.tourism === "attraction") return 3;
 
   return 2;
 }
@@ -143,6 +154,7 @@ function getImportance(tags) {
 function isValidPlace(place) {
 
   if (!place.tags) return false;
+
   if (!place.tags.name) return false;
 
   if (place.tags.access === "private") return false;
@@ -166,6 +178,7 @@ async function existsOsm(osmId) {
 }
 
 
+
 // ==============================
 // IMPORT
 // ==============================
@@ -186,8 +199,20 @@ async function importar() {
     node["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     way["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
 
+    node["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    way["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+
     node["amenity"="place_of_worship"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     way["amenity"="place_of_worship"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+
+    node["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    way["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+
+    node["historic"="monument"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    way["historic"="monument"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+
+    node["tourism"="attraction"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    way["tourism"="attraction"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
   );
   out center;
   `;
