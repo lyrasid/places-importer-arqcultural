@@ -1,25 +1,17 @@
 const admin = require("firebase-admin");
 
 // ========== INIT FIREBASE ==========
-let serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
-
-if (!serviceAccountRaw) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT não encontrada");
-  console.error("👉 Verifique GitHub Secrets: FIREBASE_SERVICE_ACCOUNT");
-  process.exit(1);
-}
-
 let serviceAccount;
 
-try {
-  serviceAccount = JSON.parse(serviceAccountRaw);
-} catch (err) {
-  console.error("❌ FIREBASE_SERVICE_ACCOUNT inválida (JSON quebrado)");
-  throw err;
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
 }
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
+  projectId: serviceAccount.project_id,
 });
 
 const db = admin.firestore();
@@ -56,6 +48,7 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
+// ========== FETCH ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
@@ -71,6 +64,9 @@ async function fetchOverpass(query) {
       });
 
       const text = await res.text();
+
+      if (!text || text.includes("<html")) continue;
+
       const data = JSON.parse(text);
 
       if (data?.elements?.length) {
@@ -86,19 +82,12 @@ async function fetchOverpass(query) {
 }
 
 // ========== SAVE ==========
-async function savePlacesBatch(places) {
-  const BATCH_SIZE = 400;
-  let batch = db.batch();
-  let count = 0;
-  let total = 0;
-
-  for (const place of places) {
+async function savePlace(place) {
+  try {
     const id = place.id?.toString();
-    if (!id) continue;
+    if (!id) return false;
 
-    const ref = db.collection("places").doc(id);
-
-    batch.set(ref, {
+    await db.collection("places").doc(id).set({
       id,
       lat: place.lat || place.center?.lat || null,
       lng: place.lon || place.center?.lon || null,
@@ -106,23 +95,11 @@ async function savePlacesBatch(places) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    count++;
-    total++;
-
-    if (count >= BATCH_SIZE) {
-      await batch.commit();
-      console.log(`Batch salvo: ${total}`);
-      batch = db.batch();
-      count = 0;
-    }
+    return true;
+  } catch (err) {
+    console.log("Erro salvar:", err.message);
+    return false;
   }
-
-  if (count > 0) {
-    await batch.commit();
-    console.log(`Batch final salvo: ${total}`);
-  }
-
-  return total;
 }
 
 // ========== MAIN ==========
@@ -132,10 +109,18 @@ async function run() {
   const query = buildQuery(CONFIG.lat, CONFIG.lng, CONFIG.radius);
   const places = await fetchOverpass(query);
 
-  const total = await savePlacesBatch(places);
+  let saved = 0;
+  let skipped = 0;
+
+  for (const place of places) {
+    const ok = await savePlace(place);
+    if (ok) saved++;
+    else skipped++;
+  }
 
   console.log("Finalizado");
-  console.log("Total salvo:", total);
+  console.log("Salvos:", saved);
+  console.log("Ignorados:", skipped);
 }
 
 run().catch((err) => {
