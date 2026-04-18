@@ -1,19 +1,20 @@
 const fs = require("fs");
 
-// ========== CONFIG ==========
+// ========== CONFIG (DINÂMICO VIA GITHUB ACTIONS) ==========
 const CONFIG = {
-  city: "Barretos",
-  lat: -20.557,
-  lng: -48.567,
-  radius: 100,
+  city: process.env.CITY || "Barretos",
+  lat: Number(process.env.LAT ?? -20.557),
+  lng: Number(process.env.LNG ?? -48.567),
+  radius: Number(process.env.RADIUS ?? 1000),
   state: "SP",
   country: "Brasil",
 };
 
 console.log("CONFIG:", CONFIG);
 
-const city = process.env.CITY || CONFIG.city;
-const fileName = `places-${city.toLowerCase().replace(/\s+/g, "-")}.json`;
+// ========== OUTPUT FILE ==========
+const citySlug = CONFIG.city.toLowerCase().replace(/\s+/g, "-");
+const fileName = `places-${citySlug}.json`;
 
 // ========== OVERPASS ENDPOINTS ==========
 const ENDPOINTS = [
@@ -21,20 +22,17 @@ const ENDPOINTS = [
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
 
-// ========== QUERY ==========
+// ========== QUERY (FASE 1.5 CULTURAL) ==========
 function buildQuery(lat, lng, radius) {
   return `
   [out:json][timeout:25];
   (
-    // 🏛️ histórico e patrimônio
     node(around:${radius},${lat},${lng})["historic"];
     way(around:${radius},${lat},${lng})["historic"];
 
-    // 🏺 museus (alta qualidade)
     node(around:${radius},${lat},${lng})["tourism"="museum"];
     way(around:${radius},${lat},${lng})["tourism"="museum"];
 
-    // 🎭 cultura viva
     node(around:${radius},${lat},${lng})["amenity"="arts_centre"];
     way(around:${radius},${lat},${lng})["amenity"="arts_centre"];
 
@@ -47,11 +45,9 @@ function buildQuery(lat, lng, radius) {
     node(around:${radius},${lat},${lng})["amenity"="place_of_worship"];
     way(around:${radius},${lat},${lng})["amenity"="place_of_worship"];
 
-    // 🌳 espaço urbano relevante
     node(around:${radius},${lat},${lng})["leisure"="park"];
     way(around:${radius},${lat},${lng})["leisure"="park"];
 
-    // 🏗️ arquitetura (vai ser filtrado depois pela IA)
     node(around:${radius},${lat},${lng})["building"];
     way(around:${radius},${lat},${lng})["building"];
   );
