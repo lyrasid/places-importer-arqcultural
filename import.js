@@ -2,10 +2,7 @@ const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 
 
-// ==============================
 // CLI PARAMS
-// ==============================
-
 const args = process.argv.slice(2);
 
 function getArg(name, defaultValue) {
@@ -20,20 +17,18 @@ const CONFIG = {
   radius: parseInt(getArg("radius", "5000")),
   state: getArg("state", "SP"),
   country: getArg("country", "Brasil"),
-  dryRun: getArg("dry-run", "false") === "true",
-  limit: parseInt(getArg("limit", "9999"))
 };
 
 console.log("CONFIG:", CONFIG);
 
 
-// ==============================
-// FIREBASE
-// ==============================
+// FIREBASE INIT
 
 const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT
 );
+
+console.log("Firebase Project:", serviceAccount.project_id);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -42,9 +37,29 @@ admin.initializeApp({
 const db = admin.firestore();
 
 
-// ==============================
+// TEST FIRESTORE
+
+async function testFirestore() {
+
+  try {
+
+    await db.collection("_health").add({
+      test: true,
+      created_at: new Date().toISOString()
+    });
+
+    console.log("Firestore OK");
+
+  } catch (err) {
+
+    console.log("Firestore ERROR:", err.message);
+    throw err;
+
+  }
+}
+
+
 // OVERPASS
-// ==============================
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -52,13 +67,7 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.osm.ch/api/interpreter"
 ];
 
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-
-async function fetchOverpass(query, retries = 3) {
+async function fetchOverpass(query) {
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
 
@@ -68,8 +77,7 @@ async function fetchOverpass(query, retries = 3) {
 
       const response = await fetch(endpoint, {
         method: "POST",
-        body: query,
-        timeout: 30000
+        body: query
       });
 
       const text = await response.text();
@@ -77,178 +85,64 @@ async function fetchOverpass(query, retries = 3) {
       try {
         return JSON.parse(text);
       } catch {
-
         console.log("Resposta inválida");
-        console.log(text.substring(0, 200));
-
       }
 
-    } catch (error) {
-
-      console.log("Erro:", error.message);
-
+    } catch (err) {
+      console.log("Erro:", err.message);
     }
   }
 
-  if (retries > 0) {
-    console.log("Retry...");
-    await sleep(5000);
-    return fetchOverpass(query, retries - 1);
-  }
-
-  throw new Error("Todos endpoints falharam");
+  throw new Error("Overpass falhou");
 }
 
 
-// ==============================
-// FIRESTORE SAFE QUERY
-// ==============================
 
-async function existsOsm(osmId) {
-
-  try {
-
-    const snapshot = await db
-      .collection("places")
-      .where("source_data.osm_id", "==", osmId)
-      .limit(1)
-      .get();
-
-    return !snapshot.empty;
-
-  } catch (err) {
-
-    console.log("Firestore check error:", err.message);
-    return false;
-
-  }
-}
-
-
-// ==============================
-// CATEGORIES
-// ==============================
-
-function getCategories(tags) {
-
-  const categories = [];
-
-  if (tags.tourism === "museum") categories.push("museum");
-  if (tags.tourism === "gallery") categories.push("museum");
-  if (tags.tourism === "attraction") categories.push("attraction");
-
-  if (tags.historic) categories.push("historic");
-
-  if (tags.amenity === "theatre") categories.push("culture");
-  if (tags.amenity === "arts_centre") categories.push("culture");
-  if (tags.amenity === "place_of_worship") categories.push("religious");
-
-  if (tags.leisure === "park") categories.push("park");
-
-  if (categories.length === 0) categories.push("landmark");
-
-  return categories;
-}
-
-
-// ==============================
 // IMPORT
-// ==============================
 
 async function importar() {
 
-  console.log(`Importando ${CONFIG.city}`);
+  await testFirestore();
+
+  console.log("Importando", CONFIG.city);
 
   const query = `
   [out:json][timeout:25];
   (
     node["tourism"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["tourism"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
     node["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
-    node["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
-    node["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
-    node["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
   );
   out center;
   `;
-
 
   const data = await fetchOverpass(query);
 
   console.log("Encontrados:", data.elements.length);
 
-  let saved = 0;
-
   for (const place of data.elements) {
-
-    if (saved >= CONFIG.limit) break;
 
     if (!place.tags?.name) continue;
 
     const lat = place.lat || place.center?.lat;
     const lng = place.lon || place.center?.lon;
 
-    if (!lat || !lng) continue;
-
-    const osmId = `${place.type}_${place.id}`;
-
-    const exists = await existsOsm(osmId);
-
-    if (exists) continue;
-
-    const now = new Date().toISOString();
-
-    const placeData = {
+    await db.collection("places").add({
 
       name: place.tags.name,
 
-      location: { lat, lng },
-
-      address: {
-        city: CONFIG.city,
-        state: CONFIG.state,
-        country: CONFIG.country
+      location: {
+        lat,
+        lng
       },
 
-      categories: getCategories(place.tags),
+      created_at: new Date().toISOString()
 
-      source_data: {
-        source: "openstreetmap",
-        osm_id: osmId
-      },
+    });
 
-      created_at: now,
-      updated_at: now
-    };
-
-
-    if (!CONFIG.dryRun) {
-
-      try {
-
-        await db.collection("places").add(placeData);
-        console.log("Salvo:", placeData.name);
-        saved++;
-
-      } catch (err) {
-
-        console.log("Erro salvar:", err.message);
-
-      }
-
-    }
+    console.log("Salvo:", place.tags.name);
 
   }
 
-  console.log("Salvos:", saved);
 }
 
 importar();
