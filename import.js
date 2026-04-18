@@ -1,8 +1,6 @@
 const admin = require("firebase-admin");
 const fetch = require("node-fetch");
 
-
-// CLI PARAMS
 const args = process.argv.slice(2);
 
 function getArg(name, defaultValue) {
@@ -22,13 +20,14 @@ const CONFIG = {
 console.log("CONFIG:", CONFIG);
 
 
-// FIREBASE INIT
+// FIREBASE
 
 const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT
 );
 
-console.log("Firebase Project:", serviceAccount.project_id);
+console.log("Project ID:", serviceAccount.project_id);
+console.log("Client Email:", serviceAccount.client_email);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -37,29 +36,35 @@ admin.initializeApp({
 const db = admin.firestore();
 
 
-// TEST FIRESTORE
-
 async function testFirestore() {
 
   try {
+
+    console.log("Testing read...");
+
+    const test = await db.collection("places").limit(1).get();
+
+    console.log("Read OK");
+
+    console.log("Testing write...");
 
     await db.collection("_health").add({
       test: true,
       created_at: new Date().toISOString()
     });
 
-    console.log("Firestore OK");
+    console.log("Write OK");
 
   } catch (err) {
 
     console.log("Firestore ERROR:", err.message);
-    throw err;
+    console.log(err);
 
+    throw err;
   }
+
 }
 
-
-// OVERPASS
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -84,9 +89,7 @@ async function fetchOverpass(query) {
 
       try {
         return JSON.parse(text);
-      } catch {
-        console.log("Resposta inválida");
-      }
+      } catch {}
 
     } catch (err) {
       console.log("Erro:", err.message);
@@ -96,9 +99,6 @@ async function fetchOverpass(query) {
   throw new Error("Overpass falhou");
 }
 
-
-
-// IMPORT
 
 async function importar() {
 
@@ -127,16 +127,9 @@ async function importar() {
     const lng = place.lon || place.center?.lon;
 
     await db.collection("places").add({
-
       name: place.tags.name,
-
-      location: {
-        lat,
-        lng
-      },
-
+      location: { lat, lng },
       created_at: new Date().toISOString()
-
     });
 
     console.log("Salvo:", place.tags.name);
