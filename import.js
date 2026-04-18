@@ -1,16 +1,18 @@
 const admin = require("firebase-admin");
+const fs = require("fs");
 
 // ========== INIT FIREBASE ==========
-let serviceAccount;
 
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
+// lê credencial do arquivo (GitHub Actions)
+const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+if (!serviceAccountPath) {
+  throw new Error("GOOGLE_APPLICATION_CREDENTIALS não configurado");
 }
 
-// 🔥 FIX CRÍTICO: força região do Firestore
-process.env.FIRESTORE_EMULATOR_HOST = undefined;
+const serviceAccount = JSON.parse(
+  fs.readFileSync(serviceAccountPath, "utf8")
+);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -18,12 +20,6 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-
-// força consistência regional (IMPORTANTE)
-db.settings({
-  host: "firestore.googleapis.com",
-  ssl: true,
-});
 
 console.log("Firebase initialized OK");
 
@@ -39,14 +35,13 @@ const CONFIG = {
 
 console.log("CONFIG:", CONFIG);
 
-// ========== OVERPASS ENDPOINTS ==========
+// ========== OVERPASS ==========
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass.osm.ch/api/interpreter",
 ];
 
-// ========== QUERY ==========
 function buildQuery(lat, lng, radius) {
   return `
   [out:json];
@@ -59,7 +54,6 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
-// ========== FETCH OVERPASS ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
@@ -92,7 +86,6 @@ async function fetchOverpass(query) {
   throw new Error("Todos endpoints falharam");
 }
 
-// ========== FIRESTORE SAFE WRITE ==========
 async function savePlace(place) {
   try {
     const id = place.id?.toString();
@@ -113,7 +106,6 @@ async function savePlace(place) {
   }
 }
 
-// ========== MAIN ==========
 async function run() {
   console.log("Importando", CONFIG.city);
 
