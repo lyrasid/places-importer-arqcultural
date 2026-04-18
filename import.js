@@ -1,13 +1,16 @@
 const admin = require("firebase-admin");
+const fs = require("fs");
 
-// ========== INIT FIREBASE ==========
-let serviceAccount;
+// ========== FIREBASE INIT VIA FILE ==========
+const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
+if (!serviceAccountPath || !fs.existsSync(serviceAccountPath)) {
+  throw new Error("Service account file não encontrado");
 }
+
+const serviceAccount = JSON.parse(
+  fs.readFileSync(serviceAccountPath, "utf8")
+);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -29,14 +32,13 @@ const CONFIG = {
 
 console.log("CONFIG:", CONFIG);
 
-// ========== OVERPASS ENDPOINTS ==========
+// ========== OVERPASS ==========
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass.osm.ch/api/interpreter",
 ];
 
-// ========== QUERY ==========
 function buildQuery(lat, lng, radius) {
   return `
   [out:json];
@@ -49,11 +51,10 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
-// ========== FETCH OVERPASS ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
-      console.log("Tentando endpoint:", url);
+      console.log("Tentando:", url);
 
       const res = await fetch(url, {
         method: "POST",
@@ -62,35 +63,30 @@ async function fetchOverpass(query) {
           "Content-Type": "text/plain",
           "User-Agent": "places-importer/1.0",
         },
-        timeout: 30000,
       });
 
       const text = await res.text();
 
-      if (!text || text.includes("<html")) {
-        console.log("Resposta inválida no endpoint");
-        continue;
-      }
+      if (!text || text.includes("<html")) continue;
 
       const data = JSON.parse(text);
+
       if (data?.elements) {
         console.log("Encontrados:", data.elements.length);
         return data.elements;
       }
-    } catch (err) {
-      console.log("Erro endpoint:", err.message);
+    } catch (e) {
+      console.log("Erro endpoint:", e.message);
     }
   }
 
-  throw new Error("Todos endpoints falharam");
+  throw new Error("Overpass falhou em todos endpoints");
 }
 
-// ========== FIRESTORE SAFE WRITE ==========
 async function savePlace(place) {
   try {
     const id = place.id?.toString();
-
-    if (!id) return;
+    if (!id) return false;
 
     await db.collection("places").doc(id).set({
       id,
@@ -107,12 +103,10 @@ async function savePlace(place) {
   }
 }
 
-// ========== MAIN ==========
 async function run() {
   console.log("Importando", CONFIG.city);
 
   const query = buildQuery(CONFIG.lat, CONFIG.lng, CONFIG.radius);
-
   const places = await fetchOverpass(query);
 
   let saved = 0;
@@ -120,9 +114,7 @@ async function run() {
 
   for (const place of places) {
     const ok = await savePlace(place);
-
-    if (ok) saved++;
-    else skipped++;
+    ok ? saved++ : skipped++;
   }
 
   console.log("Finalizado");
