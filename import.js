@@ -35,6 +35,10 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
+db.settings({
+  databaseId: "(default)"
+});
+
 
 async function testFirestore() {
 
