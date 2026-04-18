@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Create Firebase Credentials
+      - name: Create Firebase Credentials File
         run: |
           echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > serviceAccount.json
 
