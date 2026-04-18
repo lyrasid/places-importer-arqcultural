@@ -1,22 +1,16 @@
 const admin = require("firebase-admin");
-const fs = require("fs");
 
 // ========== INIT FIREBASE ==========
+let serviceAccount;
 
-// lê credencial do arquivo (GitHub Actions)
-const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-
-if (!serviceAccountPath) {
-  throw new Error("GOOGLE_APPLICATION_CREDENTIALS não configurado");
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
 }
-
-const serviceAccount = JSON.parse(
-  fs.readFileSync(serviceAccountPath, "utf8")
-);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  projectId: serviceAccount.project_id,
 });
 
 const db = admin.firestore();
@@ -39,7 +33,6 @@ console.log("CONFIG:", CONFIG);
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
-  "https://overpass.osm.ch/api/interpreter",
 ];
 
 function buildQuery(lat, lng, radius) {
@@ -54,6 +47,7 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
+// ========== FETCH ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
@@ -69,12 +63,9 @@ async function fetchOverpass(query) {
       });
 
       const text = await res.text();
-
-      if (!text || text.includes("<html")) continue;
-
       const data = JSON.parse(text);
 
-      if (data?.elements) {
+      if (data?.elements?.length) {
         console.log("Encontrados:", data.elements.length);
         return data.elements;
       }
@@ -86,45 +77,57 @@ async function fetchOverpass(query) {
   throw new Error("Todos endpoints falharam");
 }
 
-async function savePlace(place) {
-  try {
-    const id = place.id?.toString();
-    if (!id) return false;
+// ========== SAVE (BATCH FIX) ==========
+async function savePlacesBatch(places) {
+  const BATCH_SIZE = 400;
+  let batch = db.batch();
+  let count = 0;
+  let total = 0;
 
-    await db.collection("places").doc(id).set({
+  for (const place of places) {
+    const id = place.id?.toString();
+    if (!id) continue;
+
+    const ref = db.collection("places").doc(id);
+
+    batch.set(ref, {
       id,
-      lat: place.lat || place.center?.lat,
-      lng: place.lon || place.center?.lon,
+      lat: place.lat || place.center?.lat || null,
+      lng: place.lon || place.center?.lon || null,
       tags: place.tags || {},
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return true;
-  } catch (err) {
-    console.log("Erro salvar:", err.message);
-    return false;
+    count++;
+    total++;
+
+    if (count >= BATCH_SIZE) {
+      await batch.commit();
+      console.log(`Batch salvo: ${total}`);
+      batch = db.batch();
+      count = 0;
+    }
   }
+
+  if (count > 0) {
+    await batch.commit();
+    console.log(`Batch final salvo: ${total}`);
+  }
+
+  return total;
 }
 
+// ========== MAIN ==========
 async function run() {
   console.log("Importando", CONFIG.city);
 
   const query = buildQuery(CONFIG.lat, CONFIG.lng, CONFIG.radius);
-
   const places = await fetchOverpass(query);
 
-  let saved = 0;
-  let skipped = 0;
-
-  for (const place of places) {
-    const ok = await savePlace(place);
-    if (ok) saved++;
-    else skipped++;
-  }
+  const total = await savePlacesBatch(places);
 
   console.log("Finalizado");
-  console.log("Salvos:", saved);
-  console.log("Ignorados:", skipped);
+  console.log("Total salvo:", total);
 }
 
 run().catch((err) => {
