@@ -1,5 +1,11 @@
 const admin = require("firebase-admin");
+const { getFirestore } = require("firebase-admin/firestore");
 const fetch = require("node-fetch");
+
+
+// -----------------------------
+// CLI PARAMS
+// -----------------------------
 
 const args = process.argv.slice(2);
 
@@ -20,25 +26,24 @@ const CONFIG = {
 console.log("CONFIG:", CONFIG);
 
 
-// FIREBASE
+// -----------------------------
+// FIREBASE INIT
+// -----------------------------
 
-const serviceAccount = JSON.parse(
-  process.env.FIREBASE_SERVICE_ACCOUNT
-);
-
-console.log("Project ID:", serviceAccount.project_id);
-console.log("Client Email:", serviceAccount.client_email);
+console.log("Initializing Firebase...");
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.applicationDefault()
 });
 
-const db = admin.firestore();
+const db = getFirestore();
 
-db.settings({
-  databaseId: "(default)"
-});
+console.log("Firebase initialized");
 
+
+// -----------------------------
+// FIRESTORE TEST
+// -----------------------------
 
 async function testFirestore() {
 
@@ -46,9 +51,12 @@ async function testFirestore() {
 
     console.log("Testing read...");
 
-    const test = await db.collection("places").limit(1).get();
+    const snapshot = await db
+      .collection("places")
+      .limit(1)
+      .get();
 
-    console.log("Read OK");
+    console.log("Read OK:", snapshot.size);
 
     console.log("Testing write...");
 
@@ -61,14 +69,17 @@ async function testFirestore() {
 
   } catch (err) {
 
-    console.log("Firestore ERROR:", err.message);
-    console.log(err);
-
+    console.log("Firestore ERROR:", err);
     throw err;
+
   }
 
 }
 
+
+// -----------------------------
+// OVERPASS
+// -----------------------------
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -76,13 +87,14 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.osm.ch/api/interpreter"
 ];
 
+
 async function fetchOverpass(query) {
 
   for (const endpoint of OVERPASS_ENDPOINTS) {
 
     try {
 
-      console.log("Endpoint:", endpoint);
+      console.log("Trying endpoint:", endpoint);
 
       const response = await fetch(endpoint, {
         method: "POST",
@@ -93,35 +105,43 @@ async function fetchOverpass(query) {
 
       try {
         return JSON.parse(text);
-      } catch {}
+      } catch {
+        console.log("Invalid JSON response");
+      }
 
     } catch (err) {
-      console.log("Erro:", err.message);
+      console.log("Endpoint error:", err.message);
     }
+
   }
 
-  throw new Error("Overpass falhou");
+  throw new Error("All Overpass endpoints failed");
 }
 
+
+// -----------------------------
+// IMPORT FUNCTION
+// -----------------------------
 
 async function importar() {
 
   await testFirestore();
 
-  console.log("Importando", CONFIG.city);
+  console.log("Importing:", CONFIG.city);
 
   const query = `
   [out:json][timeout:25];
   (
     node["tourism"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     node["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    node["amenity"="museum"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
   );
   out center;
   `;
 
   const data = await fetchOverpass(query);
 
-  console.log("Encontrados:", data.elements.length);
+  console.log("Found:", data.elements.length);
 
   for (const place of data.elements) {
 
@@ -130,16 +150,46 @@ async function importar() {
     const lat = place.lat || place.center?.lat;
     const lng = place.lon || place.center?.lon;
 
-    await db.collection("places").add({
-      name: place.tags.name,
-      location: { lat, lng },
-      created_at: new Date().toISOString()
-    });
+    try {
 
-    console.log("Salvo:", place.tags.name);
+      await db.collection("places").add({
+
+        name: place.tags.name,
+
+        location: {
+          lat,
+          lng
+        },
+
+        tags: place.tags,
+
+        source: "openstreetmap",
+
+        city: CONFIG.city,
+        state: CONFIG.state,
+        country: CONFIG.country,
+
+        created_at: new Date().toISOString()
+
+      });
+
+      console.log("Saved:", place.tags.name);
+
+    } catch (err) {
+
+      console.log("Save error:", err.message);
+
+    }
 
   }
 
+  console.log("Import finished");
+
 }
+
+
+// -----------------------------
+// RUN
+// -----------------------------
 
 importar();
