@@ -1,12 +1,21 @@
 const admin = require("firebase-admin");
 
 // ========== INIT FIREBASE ==========
+let serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT;
+
+if (!serviceAccountRaw) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT não encontrada");
+  console.error("👉 Verifique GitHub Secrets: FIREBASE_SERVICE_ACCOUNT");
+  process.exit(1);
+}
+
 let serviceAccount;
 
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
+try {
+  serviceAccount = JSON.parse(serviceAccountRaw);
+} catch (err) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT inválida (JSON quebrado)");
+  throw err;
 }
 
 admin.initializeApp({
@@ -47,7 +56,6 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
-// ========== FETCH ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
@@ -77,7 +85,7 @@ async function fetchOverpass(query) {
   throw new Error("Todos endpoints falharam");
 }
 
-// ========== SAVE (BATCH FIX) ==========
+// ========== SAVE ==========
 async function savePlacesBatch(places) {
   const BATCH_SIZE = 400;
   let batch = db.batch();
