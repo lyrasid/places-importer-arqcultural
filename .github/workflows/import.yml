@@ -20,7 +20,7 @@ on:
       radius:
         description: "Raio de busca"
         required: true
-        default: "1000"
+        default: "100"
 
 jobs:
   import:
