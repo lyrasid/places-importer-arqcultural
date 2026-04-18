@@ -1,125 +1,136 @@
-require("dotenv").config()
+const admin = require("firebase-admin");
 
-const admin = require("firebase-admin")
-const axios = require("axios")
+// ========== INIT FIREBASE ==========
+let serviceAccount;
 
-/*
-CONFIGURAÇÃO
-*/
-
-const CONFIG = {
-  city: process.env.CITY || "Barretos",
-  lat: parseFloat(process.env.LAT || -20.557),
-  lng: parseFloat(process.env.LNG || -48.567),
-  radius: parseInt(process.env.RADIUS || 5000),
-  state: process.env.STATE || "SP",
-  country: process.env.COUNTRY || "Brasil"
-}
-
-console.log("CONFIG:", CONFIG)
-
-/*
-FIREBASE INIT
-*/
-
-console.log("Initializing Firebase...")
-
-let serviceAccount
-
-try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-  } else {
-    serviceAccount = require("./serviceAccount.json")
-  }
-} catch (error) {
-  console.error("Erro ao carregar service account:", error)
-  process.exit(1)
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
 }
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-})
+  credential: admin.credential.cert(serviceAccount),
+});
 
-const db = admin.firestore()
+const db = admin.firestore();
 
-console.log("Firebase initialized")
+console.log("Firebase initialized OK");
 
-/*
-TEST FIRESTORE
-*/
+// ========== CONFIG ==========
+const CONFIG = {
+  city: "Barretos",
+  lat: -20.557,
+  lng: -48.567,
+  radius: 5000,
+  state: "SP",
+  country: "Brasil",
+};
 
-async function testFirestore() {
+console.log("CONFIG:", CONFIG);
+
+// ========== OVERPASS ENDPOINTS ==========
+const ENDPOINTS = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.openstreetmap.fr/api/interpreter",
+  "https://overpass.osm.ch/api/interpreter",
+];
+
+// ========== QUERY ==========
+function buildQuery(lat, lng, radius) {
+  return `
+  [out:json];
+  (
+    node(around:${radius},${lat},${lng});
+    way(around:${radius},${lat},${lng});
+    relation(around:${radius},${lat},${lng});
+  );
+  out center;
+  `;
+}
+
+// ========== FETCH OVERPASS ==========
+async function fetchOverpass(query) {
+  for (const url of ENDPOINTS) {
+    try {
+      console.log("Tentando endpoint:", url);
+
+      const res = await fetch(url, {
+        method: "POST",
+        body: query,
+        headers: {
+          "Content-Type": "text/plain",
+          "User-Agent": "places-importer/1.0",
+        },
+        timeout: 30000,
+      });
+
+      const text = await res.text();
+
+      if (!text || text.includes("<html")) {
+        console.log("Resposta inválida no endpoint");
+        continue;
+      }
+
+      const data = JSON.parse(text);
+      if (data?.elements) {
+        console.log("Encontrados:", data.elements.length);
+        return data.elements;
+      }
+    } catch (err) {
+      console.log("Erro endpoint:", err.message);
+    }
+  }
+
+  throw new Error("Todos endpoints falharam");
+}
+
+// ========== FIRESTORE SAFE WRITE ==========
+async function savePlace(place) {
   try {
-    console.log("Testing read...")
+    const id = place.id?.toString();
 
-    const snapshot = await db.collection("places").limit(1).get()
+    if (!id) return;
 
-    console.log("Firestore OK")
-    console.log("Docs:", snapshot.size)
-  } catch (error) {
-    console.error("Firestore ERROR:", error)
-    process.exit(1)
+    await db.collection("places").doc(id).set({
+      id,
+      lat: place.lat || place.center?.lat,
+      lng: place.lon || place.center?.lon,
+      tags: place.tags || {},
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return true;
+  } catch (err) {
+    console.log("Erro salvar:", err.message);
+    return false;
   }
 }
 
-/*
-GOOGLE PLACES
-*/
+// ========== MAIN ==========
+async function run() {
+  console.log("Importando", CONFIG.city);
 
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY
+  const query = buildQuery(CONFIG.lat, CONFIG.lng, CONFIG.radius);
 
-async function fetchPlaces() {
-  console.log("Fetching Google Places...")
+  const places = await fetchOverpass(query);
 
-  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json`
-
-  const response = await axios.get(url, {
-    params: {
-      location: `${CONFIG.lat},${CONFIG.lng}`,
-      radius: CONFIG.radius,
-      keyword: "arquitetura",
-      key: GOOGLE_API_KEY
-    }
-  })
-
-  return response.data.results
-}
-
-/*
-IMPORT
-*/
-
-async function importPlaces() {
-  await testFirestore()
-
-  const places = await fetchPlaces()
-
-  console.log("Places found:", places.length)
+  let saved = 0;
+  let skipped = 0;
 
   for (const place of places) {
-    const ref = db.collection("places").doc(place.place_id)
+    const ok = await savePlace(place);
 
-    await ref.set(
-      {
-        name: place.name,
-        address: place.vicinity || "",
-        location: new admin.firestore.GeoPoint(
-          place.geometry.location.lat,
-          place.geometry.location.lng
-        ),
-        city: CONFIG.city,
-        state: CONFIG.state,
-        country: CONFIG.country,
-        importedAt: new Date()
-      },
-      { merge: true }
-    )
-
-    console.log("Saved:", place.name)
+    if (ok) saved++;
+    else skipped++;
   }
 
-  console.log("Import finished")
+  console.log("Finalizado");
+  console.log("Salvos:", saved);
+  console.log("Ignorados:", skipped);
 }
 
-importPlaces()
+run().catch((err) => {
+  console.error("FATAL:", err);
+  process.exit(1);
+});
