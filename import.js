@@ -1,22 +1,4 @@
-const admin = require("firebase-admin");
-
-// ========== INIT FIREBASE ==========
-let serviceAccount;
-
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT não configurado");
-}
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  projectId: serviceAccount.project_id,
-});
-
-const db = admin.firestore();
-
-console.log("Firebase initialized OK");
+const fs = require("fs");
 
 // ========== CONFIG ==========
 const CONFIG = {
@@ -30,12 +12,13 @@ const CONFIG = {
 
 console.log("CONFIG:", CONFIG);
 
-// ========== OVERPASS ==========
+// ========== OVERPASS ENDPOINTS ==========
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass.openstreetmap.fr/api/interpreter",
 ];
 
+// ========== QUERY ==========
 function buildQuery(lat, lng, radius) {
   return `
   [out:json];
@@ -48,7 +31,7 @@ function buildQuery(lat, lng, radius) {
   `;
 }
 
-// ========== FETCH ==========
+// ========== FETCH OVERPASS ==========
 async function fetchOverpass(query) {
   for (const url of ENDPOINTS) {
     try {
@@ -81,49 +64,67 @@ async function fetchOverpass(query) {
   throw new Error("Todos endpoints falharam");
 }
 
-// ========== SAVE ==========
-async function savePlace(place) {
-  try {
-    const id = place.id?.toString();
-    if (!id) return false;
+// ========== CLEAN DATA ==========
+function cleanPlaces(elements) {
+  return elements
+    .filter((p) => p && p.id)
+    .map((p) => ({
+      id: p.id.toString(),
+      lat: p.lat || p.center?.lat || null,
+      lng: p.lon || p.center?.lon || null,
+      tags: p.tags || {},
+    }))
+    .filter((p) => p.lat && p.lng);
+}
 
-    await db.collection("places").doc(id).set({
-      id,
-      lat: place.lat || place.center?.lat || null,
-      lng: place.lon || place.center?.lon || null,
-      tags: place.tags || {},
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+// ========== SAVE JSON ==========
+function saveJSON(data) {
+  fs.writeFileSync(
+    "places.json",
+    JSON.stringify(data, null, 2),
+    "utf-8"
+  );
 
-    return true;
-  } catch (err) {
-    console.log("Erro salvar:", err.message);
-    return false;
-  }
+  console.log("✔ places.json gerado com", data.length, "registros");
+}
+
+// ========== SAVE STATS ==========
+function saveStats(data) {
+  const stats = {
+    total: data.length,
+    withName: data.filter((p) => p.tags?.name).length,
+    withAmenity: data.filter((p) => p.tags?.amenity).length,
+    withTourism: data.filter((p) => p.tags?.tourism).length,
+    generatedAt: new Date().toISOString(),
+    city: CONFIG.city,
+  };
+
+  fs.writeFileSync(
+    "stats.json",
+    JSON.stringify(stats, null, 2),
+    "utf-8"
+  );
+
+  console.log("✔ stats.json gerado");
 }
 
 // ========== MAIN ==========
 async function run() {
-  console.log("Importando", CONFIG.city);
+  console.log("Importando:", CONFIG.city);
 
   const query = buildQuery(CONFIG.lat, CONFIG.lng, CONFIG.radius);
-  const places = await fetchOverpass(query);
+  const raw = await fetchOverpass(query);
 
-  let saved = 0;
-  let skipped = 0;
+  const places = cleanPlaces(raw);
 
-  for (const place of places) {
-    const ok = await savePlace(place);
-    if (ok) saved++;
-    else skipped++;
-  }
+  console.log("Após limpeza:", places.length);
 
-  console.log("Finalizado");
-  console.log("Salvos:", saved);
-  console.log("Ignorados:", skipped);
+  saveJSON(places);
+  saveStats(places);
+
+  console.log("Finalizado com sucesso 🚀");
 }
 
 run().catch((err) => {
   console.error("FATAL:", err);
-  process.exit(1);
 });
