@@ -21,11 +21,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Create Firebase Credentials File
-        run: |
-          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > serviceAccount.json
-
       - name: Run Import
         env:
-          GOOGLE_APPLICATION_CREDENTIALS: serviceAccount.json
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node import.js
