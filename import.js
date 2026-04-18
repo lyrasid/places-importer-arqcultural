@@ -100,9 +100,33 @@ async function fetchOverpass(query, retries = 3) {
 }
 
 
+// ==============================
+// FIRESTORE SAFE QUERY
+// ==============================
+
+async function existsOsm(osmId) {
+
+  try {
+
+    const snapshot = await db
+      .collection("places")
+      .where("source_data.osm_id", "==", osmId)
+      .limit(1)
+      .get();
+
+    return !snapshot.empty;
+
+  } catch (err) {
+
+    console.log("Firestore check error:", err.message);
+    return false;
+
+  }
+}
+
 
 // ==============================
-// CATEGORIAS
+// CATEGORIES
 // ==============================
 
 function getCategories(tags) {
@@ -128,58 +152,6 @@ function getCategories(tags) {
 
 
 // ==============================
-// IMPORTANCE
-// ==============================
-
-function getImportance(tags) {
-
-  if (tags.wikipedia && tags.heritage) return 5;
-
-  if (tags.tourism === "museum") return 4;
-
-  if (tags.wikipedia) return 4;
-
-  if (tags.historic) return 3;
-
-  if (tags.tourism === "attraction") return 3;
-
-  return 2;
-}
-
-
-// ==============================
-// VALIDAR PLACE
-// ==============================
-
-function isValidPlace(place) {
-
-  if (!place.tags) return false;
-
-  if (!place.tags.name) return false;
-
-  if (place.tags.access === "private") return false;
-
-  return true;
-}
-
-
-// ==============================
-// DUPLICATE CHECK
-// ==============================
-
-async function existsOsm(osmId) {
-
-  const snapshot = await db
-    .collection("places")
-    .where("source_data.osm_id", "==", osmId)
-    .get();
-
-  return !snapshot.empty;
-}
-
-
-
-// ==============================
 // IMPORT
 // ==============================
 
@@ -196,23 +168,14 @@ async function importar() {
     node["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     way["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
 
-    node["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
     node["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     way["amenity"="arts_centre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
 
-    node["amenity"="place_of_worship"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["amenity"="place_of_worship"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    node["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
+    way["amenity"="theatre"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
 
     node["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
     way["leisure"="park"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
-    node["historic"="monument"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["historic"="monument"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-
-    node["tourism"="attraction"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    way["tourism"="attraction"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
   );
   out center;
   `;
@@ -220,26 +183,15 @@ async function importar() {
 
   const data = await fetchOverpass(query);
 
-  if (!data.elements) {
-    console.log("Nenhum resultado");
-    return;
-  }
-
   console.log("Encontrados:", data.elements.length);
 
-
   let saved = 0;
-  let skipped = 0;
-
 
   for (const place of data.elements) {
 
     if (saved >= CONFIG.limit) break;
 
-    if (!isValidPlace(place)) {
-      skipped++;
-      continue;
-    }
+    if (!place.tags?.name) continue;
 
     const lat = place.lat || place.center?.lat;
     const lng = place.lon || place.center?.lon;
@@ -250,11 +202,7 @@ async function importar() {
 
     const exists = await existsOsm(osmId);
 
-    if (exists) {
-      skipped++;
-      continue;
-    }
-
+    if (exists) continue;
 
     const now = new Date().toISOString();
 
@@ -262,10 +210,7 @@ async function importar() {
 
       name: place.tags.name,
 
-      location: {
-        lat,
-        lng
-      },
+      location: { lat, lng },
 
       address: {
         city: CONFIG.city,
@@ -275,17 +220,9 @@ async function importar() {
 
       categories: getCategories(place.tags),
 
-      importance_level: getImportance(place.tags),
-
       source_data: {
         source: "openstreetmap",
-        osm_id: osmId,
-        tags: place.tags
-      },
-
-      metadata: {
-        ai_enriched: false,
-        verified: false
+        osm_id: osmId
       },
 
       created_at: now,
@@ -293,27 +230,25 @@ async function importar() {
     };
 
 
-    if (CONFIG.dryRun) {
+    if (!CONFIG.dryRun) {
 
-      console.log("DRY RUN:", placeData.name);
+      try {
 
-    } else {
+        await db.collection("places").add(placeData);
+        console.log("Salvo:", placeData.name);
+        saved++;
 
-      await db.collection("places").add(placeData);
+      } catch (err) {
 
-      console.log("Salvo:", placeData.name);
+        console.log("Erro salvar:", err.message);
+
+      }
 
     }
 
-    saved++;
   }
 
-
   console.log("Salvos:", saved);
-  console.log("Ignorados:", skipped);
-
-  console.log("Finalizado");
 }
-
 
 importar();
