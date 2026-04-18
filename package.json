@@ -1,0 +1,8 @@
+{
+  "name": "places-importer",
+  "version": "1.0.0",
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "node-fetch": "^2.6.7"
+  }
+}
