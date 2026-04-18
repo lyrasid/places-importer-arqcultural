@@ -5,7 +5,7 @@ const CONFIG = {
   city: "Barretos",
   lat: -20.557,
   lng: -48.567,
-  radius: 1000,
+  radius: 100,
   state: "SP",
   country: "Brasil",
 };
@@ -24,13 +24,38 @@ const ENDPOINTS = [
 // ========== QUERY ==========
 function buildQuery(lat, lng, radius) {
   return `
-  [out:json];
+  [out:json][timeout:25];
   (
-    node(around:${radius},${lat},${lng});
-    way(around:${radius},${lat},${lng});
-    relation(around:${radius},${lat},${lng});
+    // 🏛️ histórico e patrimônio
+    node(around:${radius},${lat},${lng})["historic"];
+    way(around:${radius},${lat},${lng})["historic"];
+
+    // 🏺 museus (alta qualidade)
+    node(around:${radius},${lat},${lng})["tourism"="museum"];
+    way(around:${radius},${lat},${lng})["tourism"="museum"];
+
+    // 🎭 cultura viva
+    node(around:${radius},${lat},${lng})["amenity"="arts_centre"];
+    way(around:${radius},${lat},${lng})["amenity"="arts_centre"];
+
+    node(around:${radius},${lat},${lng})["amenity"="theatre"];
+    way(around:${radius},${lat},${lng})["amenity"="theatre"];
+
+    node(around:${radius},${lat},${lng})["amenity"="library"];
+    way(around:${radius},${lat},${lng})["amenity"="library"];
+
+    node(around:${radius},${lat},${lng})["amenity"="place_of_worship"];
+    way(around:${radius},${lat},${lng})["amenity"="place_of_worship"];
+
+    // 🌳 espaço urbano relevante
+    node(around:${radius},${lat},${lng})["leisure"="park"];
+    way(around:${radius},${lat},${lng})["leisure"="park"];
+
+    // 🏗️ arquitetura (vai ser filtrado depois pela IA)
+    node(around:${radius},${lat},${lng})["building"];
+    way(around:${radius},${lat},${lng})["building"];
   );
-  out center;
+  out center tags;
   `;
 }
 
