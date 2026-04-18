@@ -1,195 +1,125 @@
-const admin = require("firebase-admin");
-const { getFirestore } = require("firebase-admin/firestore");
-const fetch = require("node-fetch");
+require("dotenv").config()
 
+const admin = require("firebase-admin")
+const axios = require("axios")
 
-// -----------------------------
-// CLI PARAMS
-// -----------------------------
-
-const args = process.argv.slice(2);
-
-function getArg(name, defaultValue) {
-  const arg = args.find(a => a.startsWith(`--${name}=`));
-  return arg ? arg.split("=")[1] : defaultValue;
-}
+/*
+CONFIGURAÇÃO
+*/
 
 const CONFIG = {
-  city: getArg("city", "Barretos"),
-  lat: parseFloat(getArg("lat", "-20.557")),
-  lng: parseFloat(getArg("lng", "-48.567")),
-  radius: parseInt(getArg("radius", "5000")),
-  state: getArg("state", "SP"),
-  country: getArg("country", "Brasil"),
-};
+  city: process.env.CITY || "Barretos",
+  lat: parseFloat(process.env.LAT || -20.557),
+  lng: parseFloat(process.env.LNG || -48.567),
+  radius: parseInt(process.env.RADIUS || 5000),
+  state: process.env.STATE || "SP",
+  country: process.env.COUNTRY || "Brasil"
+}
 
-console.log("CONFIG:", CONFIG);
+console.log("CONFIG:", CONFIG)
 
+/*
+FIREBASE INIT
+*/
 
-// -----------------------------
-// FIREBASE INIT
-// -----------------------------
+console.log("Initializing Firebase...")
 
-console.log("Initializing Firebase...");
+let serviceAccount
+
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  } else {
+    serviceAccount = require("./serviceAccount.json")
+  }
+} catch (error) {
+  console.error("Erro ao carregar service account:", error)
+  process.exit(1)
+}
 
 admin.initializeApp({
-  credential: admin.credential.applicationDefault()
-});
+  credential: admin.credential.cert(serviceAccount)
+})
 
-const db = getFirestore();
+const db = admin.firestore()
 
-console.log("Firebase initialized");
+console.log("Firebase initialized")
 
-
-// -----------------------------
-// FIRESTORE TEST
-// -----------------------------
+/*
+TEST FIRESTORE
+*/
 
 async function testFirestore() {
-
   try {
+    console.log("Testing read...")
 
-    console.log("Testing read...");
+    const snapshot = await db.collection("places").limit(1).get()
 
-    const snapshot = await db
-      .collection("places")
-      .limit(1)
-      .get();
-
-    console.log("Read OK:", snapshot.size);
-
-    console.log("Testing write...");
-
-    await db.collection("_health").add({
-      test: true,
-      created_at: new Date().toISOString()
-    });
-
-    console.log("Write OK");
-
-  } catch (err) {
-
-    console.log("Firestore ERROR:", err);
-    throw err;
-
+    console.log("Firestore OK")
+    console.log("Docs:", snapshot.size)
+  } catch (error) {
+    console.error("Firestore ERROR:", error)
+    process.exit(1)
   }
-
 }
 
+/*
+GOOGLE PLACES
+*/
 
-// -----------------------------
-// OVERPASS
-// -----------------------------
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY
 
-const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.osm.ch/api/interpreter"
-];
+async function fetchPlaces() {
+  console.log("Fetching Google Places...")
 
+  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json`
 
-async function fetchOverpass(query) {
-
-  for (const endpoint of OVERPASS_ENDPOINTS) {
-
-    try {
-
-      console.log("Trying endpoint:", endpoint);
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        body: query
-      });
-
-      const text = await response.text();
-
-      try {
-        return JSON.parse(text);
-      } catch {
-        console.log("Invalid JSON response");
-      }
-
-    } catch (err) {
-      console.log("Endpoint error:", err.message);
+  const response = await axios.get(url, {
+    params: {
+      location: `${CONFIG.lat},${CONFIG.lng}`,
+      radius: CONFIG.radius,
+      keyword: "arquitetura",
+      key: GOOGLE_API_KEY
     }
+  })
 
-  }
-
-  throw new Error("All Overpass endpoints failed");
+  return response.data.results
 }
 
+/*
+IMPORT
+*/
 
-// -----------------------------
-// IMPORT FUNCTION
-// -----------------------------
+async function importPlaces() {
+  await testFirestore()
 
-async function importar() {
+  const places = await fetchPlaces()
 
-  await testFirestore();
+  console.log("Places found:", places.length)
 
-  console.log("Importing:", CONFIG.city);
+  for (const place of places) {
+    const ref = db.collection("places").doc(place.place_id)
 
-  const query = `
-  [out:json][timeout:25];
-  (
-    node["tourism"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    node["historic"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-    node["amenity"="museum"](around:${CONFIG.radius},${CONFIG.lat},${CONFIG.lng});
-  );
-  out center;
-  `;
-
-  const data = await fetchOverpass(query);
-
-  console.log("Found:", data.elements.length);
-
-  for (const place of data.elements) {
-
-    if (!place.tags?.name) continue;
-
-    const lat = place.lat || place.center?.lat;
-    const lng = place.lon || place.center?.lon;
-
-    try {
-
-      await db.collection("places").add({
-
-        name: place.tags.name,
-
-        location: {
-          lat,
-          lng
-        },
-
-        tags: place.tags,
-
-        source: "openstreetmap",
-
+    await ref.set(
+      {
+        name: place.name,
+        address: place.vicinity || "",
+        location: new admin.firestore.GeoPoint(
+          place.geometry.location.lat,
+          place.geometry.location.lng
+        ),
         city: CONFIG.city,
         state: CONFIG.state,
         country: CONFIG.country,
+        importedAt: new Date()
+      },
+      { merge: true }
+    )
 
-        created_at: new Date().toISOString()
-
-      });
-
-      console.log("Saved:", place.tags.name);
-
-    } catch (err) {
-
-      console.log("Save error:", err.message);
-
-    }
-
+    console.log("Saved:", place.name)
   }
 
-  console.log("Import finished");
-
+  console.log("Import finished")
 }
 
-
-// -----------------------------
-// RUN
-// -----------------------------
-
-importar();
+importPlaces()
