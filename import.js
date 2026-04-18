@@ -12,6 +12,9 @@ const CONFIG = {
 
 console.log("CONFIG:", CONFIG);
 
+const city = process.env.CITY || CONFIG.city;
+const fileName = `places-${city.toLowerCase().replace(/\s+/g, "-")}.json`;
+
 // ========== OVERPASS ENDPOINTS ==========
 const ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
@@ -80,12 +83,12 @@ function cleanPlaces(elements) {
 // ========== SAVE JSON ==========
 function saveJSON(data) {
   fs.writeFileSync(
-    "places.json",
+    fileName,
     JSON.stringify(data, null, 2),
     "utf-8"
   );
 
-  console.log("✔ places.json gerado com", data.length, "registros");
+  console.log(`✔ ${fileName} gerado com ${data.length} registros`);
 }
 
 // ========== SAVE STATS ==========
@@ -127,4 +130,5 @@ async function run() {
 
 run().catch((err) => {
   console.error("FATAL:", err);
+  process.exit(1);
 });
